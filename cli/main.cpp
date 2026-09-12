@@ -38,6 +38,19 @@ static std::string fmt_size(double b) {
   return buf;
 }
 
+// Strict integer parsing: never throws; keeps the old value on bad input
+// (previously std::stoi crashed with an uncaught exception on "-t abc").
+static bool parse_int(const char* s, int& out) {
+  if (!s || !*s) return false;
+  try {
+    size_t p = 0;
+    int v = std::stoi(s, &p);
+    if (s[p] != '\0') return false;
+    out = v;
+    return true;
+  } catch (...) { return false; }
+}
+
 static int cmd_add(const std::string& arc, std::vector<std::string> inputs,
                    int threads, int level, kzip::ProfileOpt prof) {
   if (inputs.empty()) { std::cerr << "missing input files\n"; return 1; }
@@ -156,13 +169,13 @@ int main(int argc, char** argv) {
       if (a == "--ultra") prof = kzip::ProfileOpt::Ultra;
       else if (a == "--lite") prof = kzip::ProfileOpt::Lite;
       else if (a == "--auto") prof = kzip::ProfileOpt::Auto;
-      else if (a == "--threads" && i + 1 < argc) threads = std::stoi(argv[++i]);
-      else if (a.rfind("--threads=", 0) == 0) threads = std::stoi(a.substr(10));
-      else if (a == "-t" && i + 1 < argc) threads = std::stoi(argv[++i]);
-      else if (a.rfind("-t", 0) == 0 && a.size() > 2) threads = std::stoi(a.substr(2));
-      else if (a == "-l" && i + 1 < argc) level = std::stoi(argv[++i]);
-      else if (a.rfind("-l", 0) == 0 && a.size() > 2) level = std::stoi(a.substr(2));
-      else if (a.rfind("--level=", 0) == 0) level = std::stoi(a.substr(8));
+      else if (a == "--threads" && i + 1 < argc) parse_int(argv[++i], threads);
+      else if (a.rfind("--threads=", 0) == 0) parse_int(a.substr(10).c_str(), threads);
+      else if (a == "-t" && i + 1 < argc) parse_int(argv[++i], threads);
+      else if (a.rfind("-t", 0) == 0 && a.size() > 2) parse_int(a.substr(2).c_str(), threads);
+      else if (a == "-l" && i + 1 < argc) parse_int(argv[++i], level);
+      else if (a.rfind("-l", 0) == 0 && a.size() > 2) parse_int(a.substr(2).c_str(), level);
+      else if (a.rfind("--level=", 0) == 0) parse_int(a.substr(8).c_str(), level);
       else inputs.push_back(a);
     }
     return cmd_add(arc, inputs, threads, level, prof);
@@ -174,8 +187,8 @@ int main(int argc, char** argv) {
       if (a == "-o" && i + 1 < argc) out = argv[++i];
       else if (a.rfind("-o", 0) == 0 && a.size() > 2) out = a.substr(2);
       else if (a.rfind("--output=", 0) == 0) out = a.substr(9);
-      else if (a == "-t" && i + 1 < argc) threads = std::stoi(argv[++i]);
-      else if (a.rfind("-t", 0) == 0 && a.size() > 2) threads = std::stoi(a.substr(2));
+      else if (a == "-t" && i + 1 < argc) parse_int(argv[++i], threads);
+      else if (a.rfind("-t", 0) == 0 && a.size() > 2) parse_int(a.substr(2).c_str(), threads);
     }
     return cmd_extract(arc, out, threads);
   } else if (cmd == "t") {

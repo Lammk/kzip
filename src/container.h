@@ -87,15 +87,29 @@ bool peek_stream_v2(const uint8_t* data, size_t n, V2Params& pr,
                     std::vector<std::string>& paths, std::vector<uint64_t>& sizes);
 
 bool write_archive(const std::string& path, std::vector<FileItem>& items);
+// Load the whole archive file once (64-bit clean); _from_buf variants below
+// parse from memory so x/t/l read the file a single time, not once per entry.
+bool load_archive_file(const std::string& path, std::vector<uint8_t>& out);
 bool read_central(const std::string& path, std::vector<ArchiveEntry>& entries,
                   std::vector<uint64_t>& lho_offsets,
                   std::vector<uint64_t>& comp_sizes,
                   std::vector<uint64_t>& uncomp_sizes,
                   std::vector<uint32_t>& crcs,
                   std::vector<uint16_t>& methods);
+bool read_central_from_buf(const std::vector<uint8_t>& buf,
+                           std::vector<ArchiveEntry>& entries,
+                           std::vector<uint64_t>& lho_offsets,
+                           std::vector<uint64_t>& comp_sizes,
+                           std::vector<uint64_t>& uncomp_sizes,
+                           std::vector<uint32_t>& crcs,
+                           std::vector<uint16_t>& methods);
 bool read_entry_payload(const std::string& path, uint64_t lho_offset,
                         std::vector<uint8_t>& payload,
                         uint64_t& uncomp_size, uint32_t& crc, uint16_t& method,
                         std::string& arcname);
+bool read_entry_payload_from_buf(const std::vector<uint8_t>& buf, uint64_t lho_offset,
+                                 std::vector<uint8_t>& payload,
+                                 uint64_t& uncomp_size, uint32_t& crc, uint16_t& method,
+                                 std::string& arcname);
 
 }} // namespace kzip::container

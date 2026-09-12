@@ -3,6 +3,7 @@
 #include "rans.h"
 #include "../include/kzip/config.h"
 #include <cstring>
+#include <vector>
 
 namespace kzip {
 
@@ -26,7 +27,9 @@ std::vector<uint8_t> compress_chunk_with_pred(const uint8_t* data, size_t n,
   for (size_t s = 0; s < num_slices; ++s) {
     size_t off = s * kSliceSize;
     size_t len = n - off < kSliceSize ? n - off : kSliceSize;
-    std::vector<uint16_t> freqs(len * 256);
+    // Reuse a thread-local 8MB scratch buffer instead of allocating per slice.
+    thread_local std::vector<uint16_t> freqs;
+    freqs.resize(len * 256);
     for (size_t i = 0; i < len; ++i) {
       uint16_t f[256];
       pred.predict(f);

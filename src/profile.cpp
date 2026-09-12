@@ -6,8 +6,8 @@
 #if defined(__linux__)
 #include <sched.h>
 #include <sys/resource.h>
-#include <unistd.h>
-#elif !defined(_WIN32)
+#endif
+#if !defined(_WIN32)
 #include <unistd.h>
 #endif
 #if defined(_WIN32)

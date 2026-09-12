@@ -3,11 +3,11 @@
 #include "prefilter.h"
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
-#include <sys/stat.h>
 
 namespace fs = std::filesystem;
 namespace kzip { namespace solid {
@@ -26,6 +26,54 @@ static std::string lower_ext(const std::string& arcname) {
   return e;
 }
 
+// Portable metadata helpers (std::filesystem works on MSVC/POSIX alike and
+// is 64-bit clean, unlike ::stat which is 32-bit and lacks S_ISDIR on MSVC).
+static bool path_is_dir(const fs::path& p, bool hint) {
+  std::error_code ec;
+  bool d = fs::is_directory(p, ec);
+  if (ec) { ec.clear(); return hint; }
+  return d;
+}
+
+static uint64_t path_size(const fs::path& p, bool is_dir) {
+  if (is_dir) return 0;
+  std::error_code ec;
+  uintmax_t n = fs::file_size(p, ec);
+  if (ec) return 0;
+  return (uint64_t)n;
+}
+
+static uint64_t path_mtime(const fs::path& p) {
+  std::error_code ec;
+  auto ft = fs::last_write_time(p, ec);
+  if (ec) return 0;
+  // C++17 file_clock -> system_clock conversion (no std::clock_cast yet).
+  auto sctp = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+      ft - fs::file_time_type::clock::now() + std::chrono::system_clock::now());
+  auto t = std::chrono::system_clock::to_time_t(sctp);
+  return t < 0 ? 0 : (uint64_t)t;
+}
+
+static uint32_t path_mode(const fs::path& p, bool is_dir) {
+  uint32_t def = is_dir ? (0040000 | 0755) : (0100000 | 0644);
+  std::error_code ec;
+  auto st = fs::status(p, ec);
+  if (ec) return def;
+  uint32_t m = is_dir ? 0040000 : 0100000;
+  auto pr = st.permissions();
+  using P = fs::perms;
+  if ((pr & P::owner_read) != P::none) m |= 0400;
+  if ((pr & P::owner_write) != P::none) m |= 0200;
+  if ((pr & P::owner_exec) != P::none) m |= 0100;
+  if ((pr & P::group_read) != P::none) m |= 0040;
+  if ((pr & P::group_write) != P::none) m |= 0020;
+  if ((pr & P::group_exec) != P::none) m |= 0010;
+  if ((pr & P::others_read) != P::none) m |= 0004;
+  if ((pr & P::others_write) != P::none) m |= 0002;
+  if ((pr & P::others_exec) != P::none) m |= 0001;
+  return m;
+}
+
 bool scan_inputs(const std::vector<std::string>& inputs, ScannedTree& out) {
   out.files.clear();
   out.dirs.clear();
@@ -40,6 +88,9 @@ bool scan_inputs(const std::vector<std::string>& inputs, ScannedTree& out) {
     if (fs::is_directory(ip, ec)) {
       ec.clear();
       fs::path parent = ip.parent_path();
+      // Bare relative input ("sm") has an empty parent; relative() against ""
+      // silently yields "" (no error), wiping every arcname. Use "." instead.
+      if (parent.empty()) parent = ".";
       auto opts = fs::directory_options::skip_permission_denied;
       for (auto it = fs::recursive_directory_iterator(ip, opts, ec);
            it != fs::recursive_directory_iterator(); ) {
@@ -53,20 +104,13 @@ bool scan_inputs(const std::vector<std::string>& inputs, ScannedTree& out) {
         ec2.clear();
         sf.is_dir = it->is_directory(ec2);
         if (ec2) {
-          // fallback via stat when d_type is unknown (overlayfs)
-          struct stat st0{};
-          sf.is_dir = (::stat(it->path().c_str(), &st0) == 0) &&
-                      S_ISDIR(st0.st_mode);
+          // Fallback when d_type is unknown (e.g. overlayfs): ask status.
+          ec2.clear();
+          sf.is_dir = path_is_dir(it->path(), false);
         }
-        struct stat st{};
-        if (::stat(it->path().c_str(), &st) == 0) {
-          sf.mtime = (uint64_t)st.st_mtime;
-          sf.mode = (uint32_t)st.st_mode;
-          sf.size = sf.is_dir ? 0 : (uint64_t)st.st_size;
-        } else {
-          sf.mtime = 0;
-          sf.mode = sf.is_dir ? (0040000 | 0755) : (0100000 | 0644);
-        }
+        sf.mtime = path_mtime(it->path());
+        sf.mode = path_mode(it->path(), sf.is_dir);
+        sf.size = path_size(it->path(), sf.is_dir);
         if (sf.is_dir) {
           if (!sf.arcname.empty() && sf.arcname.back() != '/') sf.arcname += '/';
           sf.ext = "";
@@ -83,12 +127,9 @@ bool scan_inputs(const std::vector<std::string>& inputs, ScannedTree& out) {
       sf.arcname = to_posix(ip.filename());
       sf.fspath = ip.string();
       sf.is_dir = false;
-      struct stat st{};
-      if (::stat(ip.c_str(), &st) == 0) {
-        sf.mtime = (uint64_t)st.st_mtime;
-        sf.mode = (uint32_t)st.st_mode;
-        sf.size = (uint64_t)st.st_size;
-      }
+      sf.mtime = path_mtime(ip);
+      sf.mode = path_mode(ip, false);
+      sf.size = path_size(ip, false);
       sf.ext = lower_ext(sf.arcname);
       sf.incompressible_hint = prefilter::extension_likely_compressed(sf.ext);
       out.files.push_back(std::move(sf));

@@ -3,23 +3,38 @@ on: [push, pull_request]
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
+        # NOTE: ubuntu-24.04-arm intentionally omitted — Arm runners are not
+        # available to private repos on standard plans. ARM/NEON coverage
+        # comes from macos-latest (Apple Silicon, ARM64).
         include:
           - os: ubuntu-latest   # x86-64 AVX2+FMA
-          - os: ubuntu-24.04-arm # ARM64 NEON/DotProd
-          - os: macos-latest    # Apple Silicon
+          - os: macos-latest    # Apple Silicon ARM64 NEON/DotProd
           - os: windows-latest  # MSVC x64
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
-      - uses: cmake/actions/cmake-build@v0
-        with:
-          configure-args: -DCMAKE_BUILD_TYPE=Release
-          build-args: --parallel
-      - run: ctest --test-dir build --output-on-failure -E roundtrip_1mb
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build --config Release --parallel
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
       - name: smoke CLI (solid + prefilter + profile)
         run: |
-          mkdir -p sm/src && echo 'int main(){}' > sm/src/a.cpp && head -c 20000 /dev/urandom > sm/pic.jpg
-          ./build/cli/kzip a sm.kzip sm --lite
-          ./build/cli/kzip l sm.kzip
-          ./build/cli/kzip t sm.kzip
+          KZIP="build/cli/kzip"
+          [ -f "build/cli/Release/kzip.exe" ] && KZIP="build/cli/Release/kzip.exe"
+          [ -f "build/cli/kzip.exe" ] && KZIP="build/cli/kzip.exe"
+          mkdir -p sm/src
+          python3 -c "open('sm/src/a.cpp','w').write('int main(){}' * 200)"
+          python3 -c "open('sm/pic.jpg','wb').write(bytes(range(256)) * 80)"
+          "$KZIP" a sm.kzip sm --lite
+          "$KZIP" l sm.kzip
+          "$KZIP" t sm.kzip
+          "$KZIP" x sm.kzip -o sm_out
+          diff -r sm sm_out/sm && echo SMOKE-OK

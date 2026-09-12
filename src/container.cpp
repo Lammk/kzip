@@ -8,9 +8,12 @@
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <filesystem>
+#include <fstream>
 #include <future>
 #include <thread>
 
+namespace fs = std::filesystem;
 namespace kzip { namespace container {
 
 void put_u16le(std::vector<uint8_t>& o, uint16_t v) {
@@ -361,14 +364,29 @@ bool peek_stream_v2(const uint8_t* data, size_t n, V2Params& pr,
 }
 
 // ---------------- ZIP IO (shared v1/v2) ----------------
+// NOTE: write offsets are tracked with an explicit uint64_t counter instead of
+// ftell(), whose long return type truncates past 2GB on Windows (LLP64).
 bool write_archive(const std::string& path, std::vector<FileItem>& items) {
   FILE* f = fopen(path.c_str(), "wb");
   if (!f) return false;
+  uint64_t pos = 0;
+  bool io_err = false;
+  auto put = [&](const void* p, size_t n) {
+    if (io_err || n == 0 || p == nullptr) return;
+    if (fwrite(p, 1, n, f) != n) io_err = true;
+    else pos += (uint64_t)n;
+  };
+  auto put_vec = [&](const std::vector<uint8_t>& v) {
+    if (!v.empty()) put(v.data(), v.size());
+  };
+  auto put_str = [&](const std::string& s) {
+    if (!s.empty()) put(s.data(), s.size());
+  };
   struct CD { std::string name; uint16_t method; uint16_t t,d; uint32_t crc;
               uint64_t comp, uncomp; uint64_t lho; uint32_t ext; bool dir; };
   std::vector<CD> cds;
   for (auto& it : items) {
-    uint64_t lho = (uint64_t)ftell(f);
+    uint64_t lho = pos;
     uint16_t dos_t, dos_d;
     unix_to_dos(it.mtime, dos_t, dos_d);
     uint16_t method = it.is_dir ? 0 : it.method;
@@ -393,16 +411,14 @@ bool write_archive(const std::string& path, std::vector<FileItem>& items) {
     uint16_t nl=(uint16_t)it.arcname.size();
     lh[26]=nl&0xFF;lh[27]=(nl>>8)&0xFF;
     lh[28]=0;lh[29]=0;
-    fwrite(lh,1,30,f);
-    fwrite(it.arcname.data(),1,nl,f);
+    put(lh,30);
+    put_str(it.arcname);
     if (!it.is_dir) {
       if (method == kMethodId) {
-        if (!it.comp_data.empty())
-          fwrite(it.comp_data.data(),1,it.comp_data.size(),f);
+        put_vec(it.comp_data);
       } else {
         // STORE: comp_data holds raw (preloaded); empty with size>0 means caller error
-        if (!it.comp_data.empty())
-          fwrite(it.comp_data.data(),1,it.comp_data.size(),f);
+        put_vec(it.comp_data);
       }
     }
     uint32_t ext = (it.mode << 16);
@@ -410,10 +426,10 @@ bool write_archive(const std::string& path, std::vector<FileItem>& items) {
     else ext |= 0x20;
     cds.push_back({it.arcname, method, dos_t, dos_d, crc, comp, uncomp, lho, ext, it.is_dir});
   }
-  uint64_t cd_off = (uint64_t)ftell(f);
+  uint64_t cd_off = pos;
   uint64_t cd_size = 0;
   for (auto& c : cds) {
-    long start = ftell(f);
+    uint64_t start = pos;
     uint8_t ch[46];
     ch[0]='P';ch[1]='K';ch[2]=1;ch[3]=2;
     ch[4]=63;ch[5]=0;
@@ -435,9 +451,9 @@ bool write_archive(const std::string& path, std::vector<FileItem>& items) {
     ch[38]=c.ext&0xFF;ch[39]=(c.ext>>8)&0xFF;ch[40]=(c.ext>>16)&0xFF;ch[41]=(c.ext>>24)&0xFF;
     uint32_t lo=(uint32_t)(c.lho>0xFFFFFFFF?0xFFFFFFFF:c.lho);
     ch[42]=lo&0xFF;ch[43]=(lo>>8)&0xFF;ch[44]=(lo>>16)&0xFF;ch[45]=(lo>>24)&0xFF;
-    fwrite(ch,1,46,f);
-    fwrite(c.name.data(),1,nl,f);
-    cd_size += (uint64_t)(ftell(f)-start);
+    put(ch,46);
+    put_str(c.name);
+    cd_size += pos - start;
   }
   uint8_t eocd[22];
   eocd[0]='P';eocd[1]='K';eocd[2]=5;eocd[3]=6;
@@ -450,31 +466,31 @@ bool write_archive(const std::string& path, std::vector<FileItem>& items) {
   eocd[12]=csz&0xFF;eocd[13]=(csz>>8)&0xFF;eocd[14]=(csz>>16)&0xFF;eocd[15]=(csz>>24)&0xFF;
   eocd[16]=coff&0xFF;eocd[17]=(coff>>8)&0xFF;eocd[18]=(coff>>16)&0xFF;eocd[19]=(coff>>24)&0xFF;
   eocd[20]=0;eocd[21]=0;
-  fwrite(eocd,1,22,f);
-  fclose(f);
-  return true;
+  put(eocd,22);
+  if (fclose(f) != 0) io_err = true;
+  return !io_err;
 }
 
-static bool load_file(const std::string& path, std::vector<uint8_t>& out) {
-  FILE* f = fopen(path.c_str(), "rb");
+bool load_archive_file(const std::string& path, std::vector<uint8_t>& out) {
+  out.clear();
+  std::error_code ec;
+  uintmax_t n = fs::file_size(path, ec);
+  if (ec) return false;
+  if (n > (uintmax_t)SIZE_MAX) return false; // not addressable in RAM
+  std::ifstream f(path, std::ios::binary);
   if (!f) return false;
-  fseek(f, 0, SEEK_END);
-  long n = ftell(f);
-  fseek(f, 0, SEEK_SET);
-  out.resize(n < 0 ? 0 : (size_t)n);
-  if (n > 0 && fread(out.data(), 1, (size_t)n, f) != (size_t)n) { fclose(f); return false; }
-  fclose(f);
+  out.resize((size_t)n);
+  if (n > 0 && !f.read((char*)out.data(), (std::streamsize)n)) return false;
   return true;
 }
 
-bool read_central(const std::string& path, std::vector<ArchiveEntry>& entries,
-                  std::vector<uint64_t>& lho_offsets,
-                  std::vector<uint64_t>& comp_sizes,
-                  std::vector<uint64_t>& uncomp_sizes,
-                  std::vector<uint32_t>& crcs,
-                  std::vector<uint16_t>& methods) {
-  std::vector<uint8_t> buf;
-  if (!load_file(path, buf)) return false;
+bool read_central_from_buf(const std::vector<uint8_t>& buf,
+                           std::vector<ArchiveEntry>& entries,
+                           std::vector<uint64_t>& lho_offsets,
+                           std::vector<uint64_t>& comp_sizes,
+                           std::vector<uint64_t>& uncomp_sizes,
+                           std::vector<uint32_t>& crcs,
+                           std::vector<uint16_t>& methods) {
   if (buf.size() < 22) return false;
   size_t eocd_pos = SIZE_MAX;
   size_t start = buf.size() > 65557 + 22 ? buf.size() - (65557 + 22) : 0;
@@ -521,12 +537,22 @@ bool read_central(const std::string& path, std::vector<ArchiveEntry>& entries,
   return true;
 }
 
-bool read_entry_payload(const std::string& path, uint64_t lho_offset,
-                        std::vector<uint8_t>& payload,
-                        uint64_t& uncomp_size, uint32_t& crc, uint16_t& method,
-                        std::string& arcname) {
+bool read_central(const std::string& path, std::vector<ArchiveEntry>& entries,
+                  std::vector<uint64_t>& lho_offsets,
+                  std::vector<uint64_t>& comp_sizes,
+                  std::vector<uint64_t>& uncomp_sizes,
+                  std::vector<uint32_t>& crcs,
+                  std::vector<uint16_t>& methods) {
   std::vector<uint8_t> buf;
-  if (!load_file(path, buf)) return false;
+  if (!load_archive_file(path, buf)) return false;
+  return read_central_from_buf(buf, entries, lho_offsets, comp_sizes,
+                               uncomp_sizes, crcs, methods);
+}
+
+bool read_entry_payload_from_buf(const std::vector<uint8_t>& buf, uint64_t lho_offset,
+                                 std::vector<uint8_t>& payload,
+                                 uint64_t& uncomp_size, uint32_t& crc, uint16_t& method,
+                                 std::string& arcname) {
   if (lho_offset + 30 > buf.size()) return false;
   const uint8_t* h = buf.data()+lho_offset;
   if (!(h[0]=='P'&&h[1]=='K'&&h[2]==3&&h[3]==4)) return false;
@@ -539,6 +565,16 @@ bool read_entry_payload(const std::string& path, uint64_t lho_offset,
   uncomp_size=us;
   payload.assign(h+30+nl+el, h+30+nl+el+cs);
   return true;
+}
+
+bool read_entry_payload(const std::string& path, uint64_t lho_offset,
+                        std::vector<uint8_t>& payload,
+                        uint64_t& uncomp_size, uint32_t& crc, uint16_t& method,
+                        std::string& arcname) {
+  std::vector<uint8_t> buf;
+  if (!load_archive_file(path, buf)) return false;
+  return read_entry_payload_from_buf(buf, lho_offset, payload, uncomp_size,
+                                     crc, method, arcname);
 }
 
 }} // namespace kzip::container

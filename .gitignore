@@ -1,7 +1,12 @@
 build/
+out/
+sm/
+sm_out/
 *.kzip
 *.o
 *.a
 *.so
 *.dll
+*.user
+.vs/
 .DS_Store

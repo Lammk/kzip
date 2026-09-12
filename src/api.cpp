@@ -476,7 +476,9 @@ bool decompress_archive(const std::string& archive_path, const std::string& out_
   std::vector<uint64_t> lhos, cs, us;
   std::vector<uint32_t> crcs;
   std::vector<uint16_t> methods;
-  if (!container::read_central(archive_path, entries, lhos, cs, us, crcs, methods))
+  std::vector<uint8_t> arc;
+  if (!container::load_archive_file(archive_path, arc)) return false;
+  if (!container::read_central_from_buf(arc, entries, lhos, cs, us, crcs, methods))
     return false;
   fs::create_directories(out_dir);
   bool has_solid = has_solid_entries(entries);
@@ -493,7 +495,7 @@ bool decompress_archive(const std::string& archive_path, const std::string& out_
       // Extract solid group -> multiple files
       std::vector<uint8_t> payload;
       uint64_t u; uint32_t c; uint16_t m; std::string an;
-      if (!container::read_entry_payload(archive_path, lhos[i], payload, u, c, m, an))
+      if (!container::read_entry_payload_from_buf(arc, lhos[i], payload, u, c, m, an))
         return false;
       if (m != kMethodId) return false;
       std::vector<uint8_t> raw;
@@ -537,7 +539,7 @@ bool decompress_archive(const std::string& archive_path, const std::string& out_
     fs::path op = fs::path(out_dir) / nm;
     std::vector<uint8_t> payload;
     uint64_t u; uint32_t c; uint16_t m; std::string an;
-    if (!container::read_entry_payload(archive_path, lhos[i], payload, u, c, m, an))
+    if (!container::read_entry_payload_from_buf(arc, lhos[i], payload, u, c, m, an))
       return false;
     std::vector<uint8_t> raw;
     if (!decode_payload_to_raw(payload, m, raw)) return false;
@@ -577,13 +579,15 @@ bool test_archive(const std::string& archive_path) {
   std::vector<uint64_t> lhos, cs, us;
   std::vector<uint32_t> crcs;
   std::vector<uint16_t> methods;
-  if (!container::read_central(archive_path, entries, lhos, cs, us, crcs, methods))
+  std::vector<uint8_t> arc;
+  if (!container::load_archive_file(archive_path, arc)) return false;
+  if (!container::read_central_from_buf(arc, entries, lhos, cs, us, crcs, methods))
     return false;
   for (size_t i = 0; i < entries.size(); ++i) {
     if (entries[i].is_dir) continue;
     std::vector<uint8_t> payload;
     uint64_t u; uint32_t c; uint16_t m; std::string an;
-    if (!container::read_entry_payload(archive_path, lhos[i], payload, u, c, m, an))
+    if (!container::read_entry_payload_from_buf(arc, lhos[i], payload, u, c, m, an))
       return false;
     if (m != 0 && m != kMethodId) return false;
     if (is_solid_name(entries[i].name)) {
@@ -617,7 +621,9 @@ bool list_archive(const std::string& archive_path, std::vector<ArchiveEntry>& en
   std::vector<uint64_t> lhos, cs, us;
   std::vector<uint32_t> crcs;
   std::vector<uint16_t> methods;
-  if (!container::read_central(archive_path, central, lhos, cs, us, crcs, methods))
+  std::vector<uint8_t> arc;
+  if (!container::load_archive_file(archive_path, arc)) return false;
+  if (!container::read_central_from_buf(arc, central, lhos, cs, us, crcs, methods))
     return false;
   // Keep dirs + STORE + single as before; expand solid into logical files
   for (size_t i = 0; i < central.size(); ++i) {
@@ -626,7 +632,7 @@ bool list_archive(const std::string& archive_path, std::vector<ArchiveEntry>& en
     // solid: peek manifest (no decompression)
     std::vector<uint8_t> payload;
     uint64_t u; uint32_t c; uint16_t m; std::string an;
-    if (!container::read_entry_payload(archive_path, lhos[i], payload, u, c, m, an))
+    if (!container::read_entry_payload_from_buf(arc, lhos[i], payload, u, c, m, an))
       return false;
     container::V2Params pr;
     uint64_t rs = 0; uint32_t nc = 0; bool hm = false;
