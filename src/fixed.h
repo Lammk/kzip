@@ -72,12 +72,13 @@ inline int32_t tanh_pade_q12(int32_t x) {
 // then O(1) lookup, linear interpolation. Deterministic (no libm on hot path).
 // Range [-4,4] Q12, step 64 raw (1/64.0), 513 entries.
 inline int32_t tanh_lut_q12(int32_t x) {
-  const int32_t LIM = 4 * SCALE;
+  // static constexpr: no lambda capture needed (MSVC C3493-safe).
+  static constexpr int32_t LIM = 4 * SCALE;
+  static constexpr int N = 512;
   if (x >= LIM) return SCALE;
   if (x <= -LIM) return -SCALE;
   static std::once_flag once;
   static std::vector<int32_t> lut; // 513 entries for [-4,4]
-  static constexpr int N = 512;
   std::call_once(once, [] {
     lut.resize(N + 1);
     for (int i = 0; i <= N; ++i) {
