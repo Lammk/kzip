@@ -1,0 +1,17 @@
+add_executable(kzip_roundtrip roundtrip.cpp)
+target_link_libraries(kzip_roundtrip PRIVATE kziplib)
+target_include_directories(kzip_roundtrip PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME roundtrip_1mb COMMAND kzip_roundtrip)
+set_tests_properties(roundtrip_1mb PROPERTIES TIMEOUT 300)
+
+add_executable(kzip_prefilter prefilter_test.cpp)
+target_link_libraries(kzip_prefilter PRIVATE kziplib)
+target_include_directories(kzip_prefilter PRIVATE ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src)
+add_test(NAME prefilter_gate COMMAND kzip_prefilter)
+set_tests_properties(prefilter_gate PROPERTIES TIMEOUT 60)
+
+add_executable(kzip_solid_v2 solid_v2_test.cpp)
+target_link_libraries(kzip_solid_v2 PRIVATE kziplib)
+target_include_directories(kzip_solid_v2 PRIVATE ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src)
+add_test(NAME solid_v2 COMMAND kzip_solid_v2)
+set_tests_properties(solid_v2 PROPERTIES TIMEOUT 300)

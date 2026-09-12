@@ -1,0 +1,31 @@
+cmake_minimum_required(VERSION 3.16)
+project(kzip VERSION 0.2.0 LANGUAGES C CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+option(KZIP_ENABLE_AVX2 "Enable AVX2 path on x86_64" ON)
+option(KZIP_BUILD_TESTS "Build tests" ON)
+option(KZIP_BUILD_CLI "Build CLI" ON)
+option(KZIP_BUILD_PLUGIN "Build 7-Zip plugin" ON)
+
+if (NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release)
+endif()
+
+if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  add_compile_options(-O3 -Wall -Wextra)
+endif()
+
+add_subdirectory(src)
+if (KZIP_BUILD_CLI)
+  add_subdirectory(cli)
+endif()
+if (KZIP_BUILD_TESTS)
+  enable_testing()
+  add_subdirectory(tests)
+endif()
+if (KZIP_BUILD_PLUGIN)
+  add_subdirectory(plugins/sevenzip)
+endif()

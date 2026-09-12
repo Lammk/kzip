@@ -1,0 +1,7 @@
+build/
+*.kzip
+*.o
+*.a
+*.so
+*.dll
+.DS_Store

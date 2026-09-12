@@ -1,0 +1,25 @@
+name: build
+on: [push, pull_request]
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest   # x86-64 AVX2+FMA
+          - os: ubuntu-24.04-arm # ARM64 NEON/DotProd
+          - os: macos-latest    # Apple Silicon
+          - os: windows-latest  # MSVC x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cmake/actions/cmake-build@v0
+        with:
+          configure-args: -DCMAKE_BUILD_TYPE=Release
+          build-args: --parallel
+      - run: ctest --test-dir build --output-on-failure -E roundtrip_1mb
+      - name: smoke CLI (solid + prefilter + profile)
+        run: |
+          mkdir -p sm/src && echo 'int main(){}' > sm/src/a.cpp && head -c 20000 /dev/urandom > sm/pic.jpg
+          ./build/cli/kzip a sm.kzip sm --lite
+          ./build/cli/kzip l sm.kzip
+          ./build/cli/kzip t sm.kzip
